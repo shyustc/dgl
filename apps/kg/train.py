@@ -1,3 +1,22 @@
+# -*- coding: utf-8 -*-
+#
+# setup.py
+#
+# Copyright 2018 Amazon.com, Inc. or its affiliates. All Rights Reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+
 from dataloader import EvalDataset, TrainDataset, NewBidirectionalOneShotIterator
 from dataloader import get_dataset
 
@@ -6,6 +25,8 @@ import os
 import logging
 import time
 import json
+
+from utils import get_compatible_batch_size
 
 backend = os.environ.get('DGLBACKEND', 'pytorch')
 if backend.lower() == 'mxnet':
@@ -52,10 +73,8 @@ class ArgParser(argparse.ArgumentParser):
                           help='negative sample proportional to vertex degree in the training')
         self.add_argument('--neg_deg_sample_eval', action='store_true',
                           help='negative sampling proportional to vertex degree in the evaluation')
-        self.add_argument('--neg_sample_size_valid', type=int, default=1000,
-                          help='negative sampling size for validation')
-        self.add_argument('--neg_sample_size_test', type=int, default=-1,
-                          help='negative sampling size for testing')
+        self.add_argument('--neg_sample_size_eval', type=int, default=-1,
+                          help='negative sampling size for evaluation')
         self.add_argument('--eval_percent', type=float, default=1,
                           help='sample some percentage for evaluation.')
         self.add_argument('--hidden_dim', type=int, default=256,
@@ -139,8 +158,10 @@ def run(args, logger):
     # load dataset and samplers
     dataset = get_dataset(args.data_path, args.dataset, args.format, args.data_files)
 
-    if args.neg_sample_size_test < 0:
-        args.neg_sample_size_test = dataset.n_entities
+    if args.neg_sample_size_eval < 0:
+        args.neg_sample_size_eval = dataset.n_entities
+    args.batch_size = get_compatible_batch_size(args.batch_size, args.neg_sample_size)
+    args.batch_size_eval = get_compatible_batch_size(args.batch_size_eval, args.neg_sample_size_eval)
 
     args.eval_filter = not args.no_eval_filter
     if args.neg_deg_sample_eval:
@@ -211,15 +232,15 @@ def run(args, logger):
             valid_sampler_tails = []
             for i in range(args.num_proc):
                 valid_sampler_head = eval_dataset.create_sampler('valid', args.batch_size_eval,
-                                                                  args.neg_sample_size_valid,
-                                                                  args.neg_sample_size_valid,
+                                                                  args.neg_sample_size_eval,
+                                                                  args.neg_sample_size_eval,
                                                                   args.eval_filter,
                                                                   mode='chunk-head',
                                                                   num_workers=args.num_workers,
                                                                   rank=i, ranks=args.num_proc)
                 valid_sampler_tail = eval_dataset.create_sampler('valid', args.batch_size_eval,
-                                                                  args.neg_sample_size_valid,
-                                                                  args.neg_sample_size_valid,
+                                                                  args.neg_sample_size_eval,
+                                                                  args.neg_sample_size_eval,
                                                                   args.eval_filter,
                                                                   mode='chunk-tail',
                                                                   num_workers=args.num_workers,
@@ -228,15 +249,15 @@ def run(args, logger):
                 valid_sampler_tails.append(valid_sampler_tail)
         else: # This is used for debug
             valid_sampler_head = eval_dataset.create_sampler('valid', args.batch_size_eval,
-                                                             args.neg_sample_size_valid,
-                                                             args.neg_sample_size_valid,
+                                                             args.neg_sample_size_eval,
+                                                             args.neg_sample_size_eval,
                                                              args.eval_filter,
                                                              mode='chunk-head',
                                                              num_workers=args.num_workers,
                                                              rank=0, ranks=1)
             valid_sampler_tail = eval_dataset.create_sampler('valid', args.batch_size_eval,
-                                                             args.neg_sample_size_valid,
-                                                             args.neg_sample_size_valid,
+                                                             args.neg_sample_size_eval,
+                                                             args.neg_sample_size_eval,
                                                              args.eval_filter,
                                                              mode='chunk-tail',
                                                              num_workers=args.num_workers,
@@ -247,15 +268,15 @@ def run(args, logger):
             test_sampler_heads = []
             for i in range(args.num_test_proc):
                 test_sampler_head = eval_dataset.create_sampler('test', args.batch_size_eval,
-                                                                 args.neg_sample_size_test,
-                                                                 args.neg_sample_size_test,
+                                                                 args.neg_sample_size_eval,
+                                                                 args.neg_sample_size_eval,
                                                                  args.eval_filter,
                                                                  mode='chunk-head',
                                                                  num_workers=args.num_workers,
                                                                  rank=i, ranks=args.num_test_proc)
                 test_sampler_tail = eval_dataset.create_sampler('test', args.batch_size_eval,
-                                                                 args.neg_sample_size_test,
-                                                                 args.neg_sample_size_test,
+                                                                 args.neg_sample_size_eval,
+                                                                 args.neg_sample_size_eval,
                                                                  args.eval_filter,
                                                                  mode='chunk-tail',
                                                                  num_workers=args.num_workers,
@@ -264,15 +285,15 @@ def run(args, logger):
                 test_sampler_tails.append(test_sampler_tail)
         else:
             test_sampler_head = eval_dataset.create_sampler('test', args.batch_size_eval,
-                                                            args.neg_sample_size_test,
-                                                            args.neg_sample_size_test,
+                                                            args.neg_sample_size_eval,
+                                                            args.neg_sample_size_eval,
                                                             args.eval_filter,
                                                             mode='chunk-head',
                                                             num_workers=args.num_workers,
                                                             rank=0, ranks=1)
             test_sampler_tail = eval_dataset.create_sampler('test', args.batch_size_eval,
-                                                            args.neg_sample_size_test,
-                                                            args.neg_sample_size_test,
+                                                            args.neg_sample_size_eval,
+                                                            args.neg_sample_size_eval,
                                                             args.eval_filter,
                                                             mode='chunk-tail',
                                                             num_workers=args.num_workers,
@@ -372,7 +393,7 @@ def run(args, logger):
                 proc.join()
         else:
             test(args, model, [test_sampler_head, test_sampler_tail])
-        print('test:', time.time() - start)
+        print('testing takes {:.3f} seconds'.format(time.time() - start))
 
 if __name__ == '__main__':
     args = ArgParser().parse_args()
